@@ -49,7 +49,7 @@ if uploaded_file is not None:
     # Send detection results to Groq for summarization
     groq_prompt = "Summarize the following object detection results: " + "; ".join(detection_results)
     response = llm.chat.completions.create(
-        model="llama3-70b-8192",
+        model="llama-3.1-70b-versatile",
         messages=[
             {"role": "system", "content": "You are an AI specialized in summarizing object detection results."},
             {"role": "user", "content": groq_prompt}
