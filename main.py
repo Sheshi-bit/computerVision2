@@ -1,74 +1,117 @@
-# Install Dependency
-# !pip install groq
-# !pip install transformers
-# !pip install torch
-# !pip install streamlit
-# !pip install pillow
+# Install Dependency (run once)
+# !pip install groq transformers torch streamlit pillow
 
-# Import necessary libraries
 from groq import Groq
 import streamlit as st
 from transformers import YolosImageProcessor, YolosForObjectDetection
 from PIL import Image, ImageDraw
 import torch
 
-# Initialize Groq LLM with your API key
-llm = Groq(api_key="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")  # Replace with your actual Groq API key
+# -------------------------------
+# Initialize Groq Client
+# -------------------------------
+llm = Groq(api_key="YOUR_GROQ_API_KEY")  # DO NOT hardcode in real projects
 
-# Load the YOLOs model and image processor
-model = YolosForObjectDetection.from_pretrained('hustvl/yolos-tiny')
+# -------------------------------
+# Dynamically pick a valid Groq model
+# -------------------------------
+def pick_groq_model(client):
+    models = client.models.list().data
+
+    # Priority order: chat-capable, larger models first
+    priority_keywords = ["chat", "llama", "8b", "instant"]
+
+    for keyword in priority_keywords:
+        for m in models:
+            if keyword.lower() in m.id.lower():
+                return m.id
+
+    # Absolute fallback
+    return models[0].id
+
+
+GROQ_MODEL = pick_groq_model(llm)
+print(f"Using Groq model: {GROQ_MODEL}")
+
+# -------------------------------
+# Load YOLOs model
+# -------------------------------
+model = YolosForObjectDetection.from_pretrained("hustvl/yolos-tiny")
 image_processor = YolosImageProcessor.from_pretrained("hustvl/yolos-tiny")
 
-# Streamlit app title
+# -------------------------------
+# Streamlit UI
+# -------------------------------
 st.title("YOLOs Object Detection with Groq Summarization")
 
-# Upload image
 uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # Display uploaded image
     image = Image.open(uploaded_file)
-    st.image(image, caption='Uploaded Image', use_column_width=True)
+    st.image(image, caption="Uploaded Image", use_column_width=True)
 
-    # Process the image and run object detection
     st.write("Detecting objects...")
+
     inputs = image_processor(images=image, return_tensors="pt")
     outputs = model(**inputs)
 
-    # Process the results
     target_sizes = torch.tensor([image.size[::-1]])
-    results = image_processor.post_process_object_detection(outputs, threshold=0.9, target_sizes=target_sizes)[0]
+    results = image_processor.post_process_object_detection(
+        outputs,
+        threshold=0.9,
+        target_sizes=target_sizes
+    )[0]
 
-    # Extract detection results
     detection_results = []
-    for score, label, box in zip(results["scores"], results["labels"], results["boxes"]):
+    for score, label, box in zip(
+        results["scores"], results["labels"], results["boxes"]
+    ):
         detection_results.append(
-            f"Detected {model.config.id2label[label.item()]} with confidence {round(score.item(), 3)} at location {box.tolist()}"
+            f"{model.config.id2label[label.item()]} "
+            f"(confidence={round(score.item(), 3)}, box={box.tolist()})"
         )
 
-    # Send detection results to Groq for summarization
-    groq_prompt = "Summarize the following object detection results: " + "; ".join(detection_results)
+    # -------------------------------
+    # Send results to Groq
+    # -------------------------------
+    groq_prompt = (
+        "Summarize the following object detection results clearly and concisely:\n"
+        + "\n".join(detection_results)
+    )
+
     response = llm.chat.completions.create(
-        model="llama-3.1-70b-versatile",
+        model=GROQ_MODEL,
         messages=[
-            {"role": "system", "content": "You are an AI specialized in summarizing object detection results."},
-            {"role": "user", "content": groq_prompt}
+            {
+                "role": "system",
+                "content": "You summarize computer vision object detection results."
+            },
+            {
+                "role": "user",
+                "content": groq_prompt
+            }
         ]
     )
 
-    # Extract the content of the response
-    response_content = response.choices[0].message.content
+    summary = response.choices[0].message.content
 
-    # Display the summarized results
-    st.write("Summary of Detection Results:")
-    st.write(response_content)
+    st.subheader("Summary of Detection Results")
+    st.write(summary)
 
-    # Draw bounding boxes on the image
+    # -------------------------------
+    # Draw bounding boxes
+    # -------------------------------
     draw = ImageDraw.Draw(image)
-    for score, label, box in zip(results["scores"], results["labels"], results["boxes"]):
+
+    for score, label, box in zip(
+        results["scores"], results["labels"], results["boxes"]
+    ):
         box = [round(i, 2) for i in box.tolist()]
         draw.rectangle(box, outline="red", width=3)
-        draw.text((box[0], box[1]), f"{model.config.id2label[label.item()]}: {round(score.item(), 3)}", fill="red")
+        draw.text(
+            (box[0], box[1]),
+            f"{model.config.id2label[label.item()]} ({round(score.item(), 2)})",
+            fill="red"
+        )
 
-    # Display the image with bounding boxes
-    st.image(image, caption='Detected Objects', use_column_width=True)
+    st.image(image, caption="Detected Objects", use_column_width=True)
